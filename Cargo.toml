@@ -1,0 +1,8 @@
+[package]
+name = "gl-bench"
+version = "0.1.0"
+authors = ["Dzmitry Malyshau <kvark@mozilla.com>"]
+
+[dependencies]
+gl = "0.7"
+glutin = "0.11"
