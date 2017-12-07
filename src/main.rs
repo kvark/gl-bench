@@ -64,16 +64,18 @@ fn link_program(vs: GLuint, fs: GLuint) -> GLuint {
 
 fn run_tests(
     test_name: &str,
+    clear_mask: GLenum,
+    num_draws: usize,
     queries: &[GLuint],
     warmup: usize,
     gl_window: &glutin::GlWindow,
 ) {
     for &query in queries {
         unsafe {
-            gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
+            gl::Clear(clear_mask);
             gl::BeginQuery(gl::TIME_ELAPSED, query);
 
-            gl::DrawArrays(gl::TRIANGLES, 0, 3);
+            gl::DrawArraysInstanced(gl::TRIANGLES, 0, 3, num_draws as _);
 
             gl::EndQuery(gl::TIME_ELAPSED);
             debug_assert_eq!(gl::GetError(), 0);
@@ -82,37 +84,38 @@ fn run_tests(
         gl_window.swap_buffers().unwrap();
     }
 
-    let total: usize = queries[warmup .. queries.len() - warmup]
+    let total_time = queries[warmup .. queries.len() - warmup]
         .iter()
         .map(|&query| unsafe {
             let mut result = 0;
             gl::GetQueryObjectuiv(query, gl::QUERY_RESULT, &mut result);
             result as usize
         })
-        .sum();
+        .sum::<usize>();
 
     let (width, height) = gl_window.get_inner_size().unwrap();
     let pixel_count = (width * height) as usize;
-    println!("Tested '{}' with {} samples", test_name, queries.len());
-    let fullscreen_time = total / (queries.len() - 2 * warmup);
+    println!("Tested '{}' with {} samples of {} instances",
+        test_name, queries.len(), num_draws);
+
+    let total_draws = (queries.len() - 2 * warmup) * num_draws;
+    let fullscreen_time = total_time / total_draws;
     println!("\tfull-screen time: {:.2} ms", fullscreen_time as f32 / 1.0e6);
     let megapixel_time = fullscreen_time * 1000 * 1000 / pixel_count;
-    println!("\tmega-pixel time: {:.2} ms", megapixel_time as f32 / 1.0e6);
+    println!("\tmega-pixel time: {} mcs", megapixel_time / 1000);
 }
 
 struct Config {
-    with_color: bool,
-    with_depth: bool,
     num_queries: usize,
     warmup_frames: usize,
+    num_rejects: usize,
 }
 
 fn main() {
     let config = Config {
-        with_color: true,
-        with_depth: true,
-        num_queries: 100,
-        warmup_frames: 20,
+        num_queries: 200,
+        warmup_frames: 40,
+        num_rejects: 20,
     };
 
     let events_loop = glutin::EventsLoop::new();
@@ -141,10 +144,13 @@ fn main() {
         gl::GenQueries(queries.len() as _, queries.as_mut_ptr());
         gl::BindVertexArray(vao);
         gl::UseProgram(program);
+
         assert_eq!(gl::GetError(), 0);
+
         gl::ClearColor(0.3, 0.3, 0.3, 1.0);
         gl::ClearDepth(1.0);
-        gl::DepthFunc(gl::LEQUAL);
+        gl::Enable(gl::DEPTH_TEST);
+        gl::DepthFunc(gl::LESS);
         gl::DepthMask(gl::TRUE);
     }
 
@@ -158,29 +164,28 @@ fn main() {
     println!("Screen: {}x{} resolution with {} hiDPI factor",
         width, height, gl_window.hidpi_factor());
 
-    if config.with_color {
-        unsafe {
-            gl::Disable(gl::DEPTH_TEST);
-        }
-        run_tests(
-            "color only",
-            &queries,
-            config.warmup_frames,
-            &gl_window,
-        );
+    run_tests(
+        "color and depth",
+        gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT,
+        1,
+        &queries,
+        config.warmup_frames,
+        &gl_window,
+    );
+
+    unsafe {
+        gl::Flush();
+        gl::ClearColor(1.0, 0.3, 0.3, 1.0);
     }
 
-    if config.with_color && config.with_depth {
-        unsafe {
-            gl::Enable(gl::DEPTH_TEST);
-        }
-        run_tests(
-            "color and depth",
-            &queries,
-            config.warmup_frames,
-            &gl_window,
-        );
-    }
+    run_tests(
+        "depth rejected",
+        gl::COLOR_BUFFER_BIT,
+        config.num_rejects,
+        &queries,
+        config.warmup_frames,
+        &gl_window,
+    );
 
     unsafe {
         gl::DeleteProgram(program);
