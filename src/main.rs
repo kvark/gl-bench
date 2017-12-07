@@ -5,6 +5,7 @@ extern crate gl;
 extern crate glutin;
 
 use gl::types::*;
+use glutin::GlContext;
 
 // Shader sources
 static VS_SRC: &'static str = "
@@ -21,7 +22,7 @@ static VS_SRC: &'static str = "
 ;
 
 static FS_SRC: &'static str = "
-    #version 150
+    #version 150 core
     out vec4 o_Color;
 
     void main() {
@@ -61,15 +62,68 @@ fn link_program(vs: GLuint, fs: GLuint) -> GLuint {
     }
 }
 
-fn main() {
-    use glutin::GlContext;
+fn run_tests(
+    test_name: &str,
+    queries: &[GLuint],
+    warmup: usize,
+    gl_window: &glutin::GlWindow,
+) {
+    for &query in queries {
+        unsafe {
+            gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
+            gl::BeginQuery(gl::TIME_ELAPSED, query);
 
-    let mut events_loop = glutin::EventsLoop::new();
+            gl::DrawArrays(gl::TRIANGLES, 0, 3);
+
+            gl::EndQuery(gl::TIME_ELAPSED);
+            debug_assert_eq!(gl::GetError(), 0);
+        }
+
+        gl_window.swap_buffers().unwrap();
+    }
+
+    let total: usize = queries[warmup .. queries.len() - warmup]
+        .iter()
+        .map(|&query| unsafe {
+            let mut result = 0;
+            gl::GetQueryObjectuiv(query, gl::QUERY_RESULT, &mut result);
+            result as usize
+        })
+        .sum();
+
+    let (width, height) = gl_window.get_inner_size().unwrap();
+    let pixel_count = (width * height) as usize;
+    println!("Tested '{}' with {} samples", test_name, queries.len());
+    let fullscreen_time = total / (queries.len() - 2 * warmup);
+    println!("\tfull-screen time: {:.2} ms", fullscreen_time as f32 / 1.0e6);
+    let megapixel_time = fullscreen_time * 1000 * 1000 / pixel_count;
+    println!("\tmega-pixel time: {:.2} ms", megapixel_time as f32 / 1.0e6);
+}
+
+struct Config {
+    with_color: bool,
+    with_depth: bool,
+    num_queries: usize,
+    warmup_frames: usize,
+}
+
+fn main() {
+    let config = Config {
+        with_color: true,
+        with_depth: true,
+        num_queries: 100,
+        warmup_frames: 20,
+    };
+
+    let events_loop = glutin::EventsLoop::new();
     let window = glutin::WindowBuilder::new()
+        .with_title("GL fill-rate benchmark")
         .with_fullscreen(Some(events_loop.get_primary_monitor()));
     let context = glutin::ContextBuilder::new()
-        .with_vsync(false);
-    let gl_window = glutin::GlWindow::new(window, context, &events_loop).unwrap();
+        .with_vsync(false)
+        .with_depth_buffer(24);
+    let gl_window = glutin::GlWindow::new(window, context, &events_loop)
+        .unwrap();
 
     unsafe { gl_window.make_current() }.unwrap();
 
@@ -79,10 +133,8 @@ fn main() {
     let vs = compile_shader(VS_SRC, gl::VERTEX_SHADER);
     let fs = compile_shader(FS_SRC, gl::FRAGMENT_SHADER);
     let program = link_program(vs, fs);
-    let mut queries = [0; 20];
+    let mut queries = vec![0; config.num_queries];
     let mut vao = 0;
-    let mut cur_query = 0;
-    let mut query_cycles = 0;
 
     unsafe {
         gl::GenVertexArrays(1, &mut vao);
@@ -90,48 +142,10 @@ fn main() {
         gl::BindVertexArray(vao);
         gl::UseProgram(program);
         assert_eq!(gl::GetError(), 0);
-    }
-
-    let mut sum_times = 0usize;
-    let mut running = true;
-    while running {
-        events_loop.poll_events(|event| {
-            use glutin::{Event, KeyboardInput, WindowEvent, VirtualKeyCode as Key};
-
-            if let Event::WindowEvent { event, .. } = event {
-                match event {
-                    WindowEvent::KeyboardInput { input: KeyboardInput { virtual_keycode: Some(Key::Escape), .. }, .. } |
-                    WindowEvent::Closed => running = false,
-                    _ => (),
-                }
-            }
-        });
-
-        unsafe {
-            // Clear the screen to black
-            gl::ClearColor(0.3, 0.3, 0.3, 1.0);
-            gl::Clear(gl::COLOR_BUFFER_BIT);
-
-            if query_cycles != 0 {
-                let mut result = 0;
-                gl::GetQueryObjectuiv(queries[cur_query], gl::QUERY_RESULT, &mut result);
-                sum_times += result as usize;
-            }
-            gl::BeginQuery(gl::TIME_ELAPSED, queries[cur_query]);
-
-            gl::DrawArrays(gl::TRIANGLES, 0, 3);
-
-            gl::EndQuery(gl::TIME_ELAPSED);
-            cur_query += 1;
-            if cur_query == queries.len() {
-                query_cycles += 1;
-                cur_query = 0;
-            }
-
-            debug_assert_eq!(gl::GetError(), 0);
-        }
-
-        gl_window.swap_buffers().unwrap();
+        gl::ClearColor(0.3, 0.3, 0.3, 1.0);
+        gl::ClearDepth(1.0);
+        gl::DepthFunc(gl::LEQUAL);
+        gl::DepthMask(gl::TRUE);
     }
 
     let renderer_name = unsafe {
@@ -141,12 +155,32 @@ fn main() {
     };
     println!("Renderer: {:?}", renderer_name);
     let (width, height) = gl_window.get_inner_size().unwrap();
-    let total_count = cur_query + query_cycles * queries.len();
-    let average_time = sum_times / total_count;
-    println!("Average draw time: {:.2} ms on {}x{} resolution",
-        average_time as f32 / 1.0e6, width, height);
-    let megapixel_time = average_time * 1000 * 1000 / (width * height) as usize;
-    println!("Time per mega-pixel: {:.2} ms", megapixel_time as f32 / 1.0e6);
+    println!("Screen: {}x{} resolution with {} hiDPI factor",
+        width, height, gl_window.hidpi_factor());
+
+    if config.with_color {
+        unsafe {
+            gl::Disable(gl::DEPTH_TEST);
+        }
+        run_tests(
+            "color only",
+            &queries,
+            config.warmup_frames,
+            &gl_window,
+        );
+    }
+
+    if config.with_color && config.with_depth {
+        unsafe {
+            gl::Enable(gl::DEPTH_TEST);
+        }
+        run_tests(
+            "color and depth",
+            &queries,
+            config.warmup_frames,
+            &gl_window,
+        );
+    }
 
     unsafe {
         gl::DeleteProgram(program);
