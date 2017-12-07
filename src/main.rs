@@ -5,7 +5,6 @@ extern crate gl;
 extern crate glutin;
 
 use gl::types::*;
-use std::{ptr, str};
 
 // Shader sources
 static VS_SRC: &'static str = "
@@ -32,6 +31,7 @@ static FS_SRC: &'static str = "
 
 fn compile_shader(src: &str, ty: GLenum) -> GLuint {
     use std::ffi::CString;
+    use std::ptr;
     unsafe {
         let shader = gl::CreateShader(ty);
         // Attempt to compile the shader
@@ -134,11 +134,19 @@ fn main() {
         gl_window.swap_buffers().unwrap();
     }
 
+    let renderer_name = unsafe {
+        use std::ffi::CStr;
+        let ptr = gl::GetString(gl::RENDERER);
+        CStr::from_ptr(ptr as _)
+    };
+    println!("Renderer: {:?}", renderer_name);
     let (width, height) = gl_window.get_inner_size().unwrap();
     let total_count = cur_query + query_cycles * queries.len();
     let average_time = sum_times / total_count;
-    println!("Avg draw time: {:.2} ms for {}x{} resolution",
+    println!("Average draw time: {:.2} ms on {}x{} resolution",
         average_time as f32 / 1.0e6, width, height);
+    let megapixel_time = average_time * 1000 * 1000 / (width * height) as usize;
+    println!("Time per mega-pixel: {:.2} ms", megapixel_time as f32 / 1.0e6);
 
     unsafe {
         gl::DeleteProgram(program);
