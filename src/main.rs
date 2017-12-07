@@ -6,6 +6,7 @@ extern crate glutin;
 
 use gl::types::*;
 use glutin::GlContext;
+use std::ffi::CStr;
 
 // Shader sources
 static VS_SRC: &'static str = "
@@ -69,7 +70,7 @@ fn run_tests(
     queries: &[GLuint],
     warmup: usize,
     gl_window: &glutin::GlWindow,
-) {
+) -> (usize, usize) {
     for &query in queries {
         unsafe {
             gl::Clear(clear_mask);
@@ -103,6 +104,8 @@ fn run_tests(
     println!("\tfull-screen time: {:.2} ms", fullscreen_time as f32 / 1.0e6);
     let megapixel_time = fullscreen_time * 1000 * 1000 / pixel_count;
     println!("\tmega-pixel time: {} mcs", megapixel_time / 1000);
+
+    (fullscreen_time, megapixel_time)
 }
 
 struct Config {
@@ -155,16 +158,18 @@ fn main() {
     }
 
     let renderer_name = unsafe {
-        use std::ffi::CStr;
-        let ptr = gl::GetString(gl::RENDERER);
-        CStr::from_ptr(ptr as _)
+        CStr::from_ptr(gl::GetString(gl::RENDERER) as _)
+    };
+    let version_name = unsafe {
+        CStr::from_ptr(gl::GetString(gl::VERSION) as _)
     };
     println!("Renderer: {:?}", renderer_name);
+    println!("Version: {:?}", version_name);
     let (width, height) = gl_window.get_inner_size().unwrap();
     println!("Screen: {}x{} resolution with {} hiDPI factor",
         width, height, gl_window.hidpi_factor());
 
-    run_tests(
+    let (fs_color, mp_color) = run_tests(
         "color and depth",
         gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT,
         1,
@@ -178,13 +183,20 @@ fn main() {
         gl::ClearColor(1.0, 0.3, 0.3, 1.0);
     }
 
-    run_tests(
+    let (_, mp_depth_reject) = run_tests(
         "depth rejected",
         gl::COLOR_BUFFER_BIT,
         config.num_rejects,
         &queries,
         config.warmup_frames,
         &gl_window,
+    );
+
+    println!("Table entry:");
+    println!("| {} | {:?} | {:?} | {}x{} | {} | {:.2} ms | {} mcs | {} mcs |",
+        std::env::consts::OS, version_name, renderer_name,
+        width, height, gl_window.hidpi_factor(),
+        fs_color as f32 * 1.0e-6, mp_color / 1000, mp_depth_reject / 1000
     );
 
     unsafe {
