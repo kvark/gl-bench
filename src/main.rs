@@ -95,7 +95,8 @@ fn run_tests(
         .sum::<usize>();
 
     let (width, height) = gl_window.get_inner_size().unwrap();
-    let pixel_count = (width * height) as usize;
+    let hidpi = gl_window.hidpi_factor();
+    let pixel_count = (width as f32 * height as f32 * hidpi) as usize;
     println!("Tested '{}' with {} samples of {} instances",
         test_name, queries.len(), num_draws);
 
