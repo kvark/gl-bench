@@ -1,6 +1,8 @@
 //! Full-screen pixel rate
 //! Based on a glutin sample
 
+#[macro_use]
+extern crate bitflags;
 extern crate gl;
 extern crate glutin;
 
@@ -63,22 +65,40 @@ fn link_program(vs: GLuint, fs: GLuint) -> GLuint {
     }
 }
 
+bitflags! {
+    struct Flags: u32 {
+        const CLEAR = 0x1;
+        const DRAW = 0x2;
+    }
+}
+
 fn run_tests(
     test_name: &str,
     clear_mask: GLenum,
     num_draws: usize,
     queries: &[GLuint],
     warmup: usize,
+    flags: Flags,
     gl_window: &glutin::GlWindow,
 ) -> (usize, usize) {
     for &query in queries {
         unsafe {
+            if flags.contains(Flags::CLEAR) {
+                gl::BeginQuery(gl::TIME_ELAPSED, query);
+            }
             gl::Clear(clear_mask);
-            gl::BeginQuery(gl::TIME_ELAPSED, query);
+            if !flags.contains(Flags::CLEAR) {
+                gl::BeginQuery(gl::TIME_ELAPSED, query);
+            }
+            if !flags.contains(Flags::DRAW) {
+                gl::EndQuery(gl::TIME_ELAPSED);
+            }
 
             gl::DrawArraysInstanced(gl::TRIANGLES, 0, 3, num_draws as _);
 
-            gl::EndQuery(gl::TIME_ELAPSED);
+            if flags.contains(Flags::DRAW) {
+                gl::EndQuery(gl::TIME_ELAPSED);
+            }
             debug_assert_eq!(gl::GetError(), 0);
         }
 
@@ -176,6 +196,7 @@ fn main() {
         1,
         &queries,
         config.warmup_frames,
+        Flags::DRAW,
         &gl_window,
     );
 
@@ -190,14 +211,28 @@ fn main() {
         config.num_rejects,
         &queries,
         config.warmup_frames,
+        Flags::DRAW,
+        &gl_window,
+    );
+
+    let (_, mp_color_clear) = run_tests(
+        "depth rejected",
+        gl::COLOR_BUFFER_BIT,
+        config.num_rejects,
+        &queries,
+        config.warmup_frames,
+        Flags::CLEAR,
         &gl_window,
     );
 
     println!("Table entry:");
-    println!("| {} | {:?} | {:?} | {}x{} | {} | {:.2} ms | {} mcs | {} mcs |",
+    println!("| {} | {:?} | {:?} | {}x{} | {} | {:.2} ms | {} mcs | {} mcs | {} mcs |",
         std::env::consts::OS, version_name, renderer_name,
         width, height, gl_window.hidpi_factor(),
-        fs_color as f32 * 1.0e-6, mp_color / 1000, mp_depth_reject / 1000
+        fs_color as f32 * 1.0e-6,
+        mp_color_clear / 1000,
+        mp_color / 1000,
+        mp_depth_reject / 1000
     );
 
     unsafe {
